@@ -17,6 +17,8 @@
     {
       devShells.${system}.default = pkgs.mkShell {
         buildInputs = [
+          pkgs.cargo
+          pkgs.rustc
           pkgs.cassandra_4
           pkgs.openjdk11_headless  # Жестко фиксируем стабильную Java 11
           pythonEnv
@@ -27,9 +29,11 @@
           echo " Стенд Cassandra готов к работе."
           echo " Запустите тесты командой:"
           echo "   run-bench"
+          echo "   run-entropy - Вычислить энтропию"
           echo "--------------------------------------------------------"
 
           alias run-bench="python collect_cassandra_blocks.py"
+          alias run-entropy="cargo run --release --manifest-path=$PWD/entropy_analyzer/Cargo.toml --"
         '';
       };
     };
