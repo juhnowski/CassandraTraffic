@@ -47,7 +47,6 @@ def setup_configs():
               os.path.join(CASS_DIR, "saved_caches"), os.path.join(CASS_DIR, "hints"), os.path.join(CASS_DIR, "logs"), OUTPUT_DIR]:
         os.makedirs(p, exist_ok=True)
 
-    # 1. Генерируем cassandra.yaml
     with open(os.path.join(CASS_CONF, "cassandra.yaml"), "w") as f:
         f.write(f"""
 cluster_name: 'TestCluster'
@@ -60,14 +59,9 @@ data_file_directories:
 commitlog_directory: {CASS_DIR}/commitlog
 saved_caches_directory: {CASS_DIR}/saved_caches
 hints_directory: {CASS_DIR}/hints
-
-# ДОБАВИТЬ ЭТИ ДВЕ СТРОКИ:
 commitlog_sync: periodic
 commitlog_sync_period_in_ms: 10000
-
 native_transport_port: 9042
-jmx_port: 7199
-rpc_port: 9160
 listen_address: 127.0.0.1
 rpc_address: 127.0.0.1
 endpoint_snitch: SimpleSnitch
@@ -81,7 +75,6 @@ seed_provider:
           - seeds: "127.0.0.1"
 """)
 
-    # 2. Генерируем logback.xml
     with open(os.path.join(CASS_CONF, "logback.xml"), "w") as f:
         f.write(f"""
 <configuration scan="true" scanPeriod="60 seconds">
@@ -100,23 +93,20 @@ def find_cassandra_libs():
         print("[!] Ошибка: Утилита cassandra не найдена в PATH. Вы вошли в nix develop?")
         sys.exit(1)
     
-    # Разрешаем симлинк до реального пути пакета в /nix/store
     real_bin = os.path.realpath(cass_bin)
     cass_base = os.path.abspath(os.path.join(real_bin, "..", ".."))
     
-    # Библиотеки в пакете Nixpkgs лежат в share/cassandra/lib/
     lib_dir = os.path.join(cass_base, "share", "cassandra", "lib")
     conf_dir = os.path.join(cass_base, "share", "cassandra", "conf")
     
     if not os.path.exists(lib_dir):
-        # Фолбэк на случай альтернативной структуры путей
         lib_dir = os.path.join(cass_base, "lib")
         conf_dir = os.path.join(cass_base, "conf")
 
     return conf_dir, lib_dir
 
 def wait_for_port(port=9042, timeout=60):
-    """Ожидает доступности нативного порта Cassandra"""
+    """Ожидает доступности нативного端口а Cassandra"""
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
@@ -130,7 +120,6 @@ def main():
     setup_configs()
     store_conf, store_lib = find_cassandra_libs()
     
-    # Автоматически находим jamm-*.jar агент в директории библиотек Cassandra
     jamm_agent = None
     for f in os.listdir(store_lib):
         if f.startswith("jamm-") and f.endswith(".jar"):
@@ -138,28 +127,26 @@ def main():
             break
             
     if not jamm_agent:
-        print("[!] Ошибка: Не удалось найти java-агент jamm.jar внутри пакета Cassandra!")
+        print("[!] Ошибка: Не удалось найти java-агент jamm.jar!")
         sys.exit(1)
         
-    # Формируем Java Classpath со всеми JAR-файлами Cassandra
     classpath = f"{CASS_CONF}:{store_conf}:{store_lib}/*"
     
-    # Исчерпывающий набор JPMS и Security флагов для запуска Cassandra 4 в NixOS
     java_cmd = [
         "java", "-Xmx1G", "-Xms1G",
         "-Djava.security.manager=allow",
-        f"-javaagent:{jamm_agent}",  # ГЛАВНЫЙ ФИКС: Подключаем агент JAMM для обхода ошибок Hidden Classes
+        f"-javaagent:{jamm_agent}",
+        "-Dcom.sun.management.jmxremote.port=7199",
+        "-Dcom.sun.management.jmxremote.authenticate=false",
+        "-Dcom.sun.management.jmxremote.ssl=false",
         "-Dcassandra.config=file:///" + os.path.join(CASS_CONF, "cassandra.yaml"),
         "-Dcassandra.logback.configurationFile=" + os.path.join(CASS_CONF, "logback.xml"),
         "-Dcassandra.logdir=" + os.path.join(CASS_DIR, "logs"),
         "-Dcassandra-foreground=false",
         
-        # Экспорты внутренних модулей JDK
         "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED",
         "--add-exports=java.base/jdk.internal.ref=ALL-UNNAMED",
         "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED",
-        
-        # Открытия пакетов для рефлексии (JAMM и Netty)
         "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
         "--add-opens=java.base/jdk.internal.ref=ALL-UNNAMED",
         "--add-opens=java.base/java.lang=ALL-UNNAMED",
@@ -176,7 +163,6 @@ def main():
     ]
     
     print("[+] Запуск изолированного процесса Cassandra с Java-агентом...")
-    # Направляем ошибки в sys.stderr, чтобы контролировать прогресс инициализации
     proc = subprocess.Popen(java_cmd, stdout=subprocess.DEVNULL, stderr=sys.stderr)
     
     try:
@@ -214,7 +200,6 @@ def main():
         print("\n[+] Вызов 'nodetool flush' для создания SSTables на диске...")
         nodetool_env = os.environ.copy()
         nodetool_env["CASSANDRA_CONF"] = CASS_CONF
-        # Передаем утилите nodetool права на работу с памятью в Java 11/17+
         nodetool_env["JVM_OPTS"] = (
             "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED "
             "--add-exports=java.base/jdk.internal.ref=ALL-UNNAMED "
@@ -224,7 +209,7 @@ def main():
             "--add-opens=java.base/java.nio=ALL-UNNAMED"
         )
         subprocess.run(f"nodetool -h 127.0.0.1 -p 7199 flush bench_ks", shell=True, env=nodetool_env)
-        time.sleep(5)
+        time.sleep(15)
         
         print("\n[+] Сбор сырых бинарных файлов Data.db...")
         if not os.path.exists(CASS_DATA_DIR):
@@ -233,11 +218,13 @@ def main():
 
         for name, config in SCENARIOS.items():
             table_name = config["table"]
+            # Находим нужную подпапку таблицы (с суффиксом UUID)
             subdirs = [d for d in os.listdir(CASS_DATA_DIR) if d.startswith(table_name + "-")]
             if not subdirs:
                 print(f"    Ошибка: папка для таблицы {table_name} не найдена!")
                 continue
                 
+            # ФИКС: Берем первый элемент списка [0]
             target_dir = os.path.join(CASS_DATA_DIR, subdirs[0])
             data_files = [f for f in os.listdir(target_dir) if "Data.db" in f]
             if not data_files:
@@ -250,6 +237,7 @@ def main():
             shutil.copy(src_file, dest_file)
             size_kb = os.path.getsize(dest_file) // 1024
             print(f"    Сохранено: {dest_file} ({size_kb} KB)")
+
             
         print("\n[+] Сбор блоков для Cassandra завершен успешно!")
 
@@ -257,7 +245,6 @@ def main():
         print("[+] Остановка локального процесса Cassandra...")
         proc.terminate()
         proc.wait()
-
 
 if __name__ == "__main__":
     main()
